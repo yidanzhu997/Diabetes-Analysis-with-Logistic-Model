@@ -1,0 +1,248 @@
+---
+title: "Final Project"
+author: "Yidan Zhu"
+date: "3/2/2022"
+output:pdf_document: default
+---
+
+```{r}
+df<-read.csv('diabetes.csv')
+```
+
+#Main Question of Interest: Influence of number of pregancies on Diabetes
+#Main Variable of Interest: Pregnancies
+#Confounder Variables: BloodPressure, SkinThickness, BMI, Age, and DiabetesPedigreeFunction
+#Response: Outcome
+
+#Excluding Glucose and Insulin because they directly explain diagnosis of diabetes.
+```{r}
+df<-df[,c(-2,-5)]
+```
+
+#Response and Primary Predictor Overview
+```{r}
+library(dplyr)
+df %>% count(Outcome)
+```
+
+```{r}
+hist(df$Pregnancies, xlab = 'Number of Pregnancies', main='Histogram of Pregnancies')
+hist(df$Outcome,xlab='Outcome', main='Histogram of Outcome')
+```
+
+
+#Imputate mising data with mean:
+```{r}
+library(dplyr)
+df %>% count(BloodPressure)
+BP_mean = round(sum(df$BloodPressure)/(768-35),2)
+df$BloodPressure[df$BloodPressure==0]<-BP_mean
+```
+
+```{r}
+library(dplyr)
+df %>% count(BMI)
+BMI_mean = round(sum(df$BMI)/(768-11),2)
+df$BMI[df$BMI==0]<-BMI_mean
+```
+
+#Imputate missing skinthickness data: 
+```{r}
+library(dplyr)
+df %>% count(SkinThickness)
+```
+
+```{r}
+df_comp <- df[,-7]
+df_comp[df_comp==0]<-NA
+df_comp$Outcome<-df$Outcome
+df_comp = df_comp[complete.cases(df_comp),]
+```
+
+```{r,warning=FALSE}
+model_st<-lm(SkinThickness ~ Age+BloodPressure+BMI+DiabetesPedigreeFunction, data=df_comp)
+library(sjPlot)
+tab_model(model_st, dv.labels = 'Imputation Model', digits = 3)
+summary(model_st)
+```
+
+```{r}
+ind = which(df$SkinThickness == 0) 
+df$SkinThickness[ind] = predict(model_st, newdata = df[ind,])
+df$SkinThickness<-round(df$SkinThickness,2)
+```
+
+#Data Preview after imputation
+```{r}
+library(psych)
+data_view<-describeBy(df)
+data_view<-data_view[, c(3,4,5,8,9,10)]
+data_view
+```
+
+#Check correlations: 
+```{r,warning=FALSE}
+library(ggcorrplot)
+df.cor<-round(cor(df),2)
+ggcorrplot(df.cor)
+```  
+
+#Fit a model with confounder variables with backward selection: 
+```{r}
+model_conf1 <- glm(formula=Outcome ~ BloodPressure + SkinThickness + BMI + DiabetesPedigreeFunction + Age, family=binomial(link=logit), data=df)
+library(sjPlot)
+tab_model(model_conf1, dv.labels = 'Confounder Model', digits = 3)
+step(model_conf1, scope=~1, direction="backward", p=0.2)
+```
+
+#Final confounder model: 
+```{r}
+model_conf2<-glm(formula = Outcome ~ BMI + DiabetesPedigreeFunction + Age, family = binomial(link = logit), data = df)
+library(sjPlot)
+tab_model(model_conf2, dv.labels = 'Final Confounder Model', digits = 3)
+summary(model_conf2)
+```
+
+#Add main variable of interest - Pregnancies: 
+```{r}
+model_main<-glm(formula = Outcome ~ Pregnancies + BMI + DiabetesPedigreeFunction + Age, family = binomial(link = logit), data = df)
+library(sjPlot)
+tab_model(model_main, dv.labels = 'Model with Primary Interest', digits = 3)
+summary(model_main)
+```
+
+#Interested in how age affects pregnancies' influence on diabetes
+```{r}
+model_main_int<-glm(formula = Outcome ~ Pregnancies + BMI + DiabetesPedigreeFunction + Age + Pregnancies:Age, family = binomial(link = logit), data = df)
+anova(model_main, model_main_int, test='LRT')
+```
+
+```{r}
+library(sjPlot)
+tab_model(model_main_int, dv.labels = 'Model with Primary Interest and Interaction', digits = 3)
+summary(model_main_int)
+```
+
+#Goodness of Fit: 
+```{r,warning=FALSE}
+hoslem=function (obs, pred, g = 0) {  if (g == 0){g = round(min(length(obs)/10, 10))}
+ord <- order(pred)
+obs.o <- obs[ord]
+pred.o <- pred[ord]
+interval = cut(pred.o, quantile(pred.o, 0:g/g), include.lowest = TRUE)
+ counts = xtabs(formula = cbind(obs.o, pred.o) ~ interval)
+ centers <- aggregate(formula = pred.o ~ interval, FUN = "mean")
+ pear.res <- (counts[, "obs.o"] - counts[, "pred.o"])/sqrt(counts[, "pred.o"])
+ pearson <- sum(pear.res^2)
+ if (any(counts[, "pred.o"] < 5))
+{ warning("Some expected counts are less than 5. Use smaller number of groups")}
+ p = 1 - pchisq(pearson, g - 2)
+ results <- as.data.frame(cbind(counts[, "obs.o"], counts[,"pred.o"], centers$pred.o, pear.res))
+colnames(results) <- c("obs.o", "pred.o", "avg mean", "pearson resid")
+cat("Hosmer-Lemeshow test with", g, "bins", "\n", "Pearson Stat = ",pearson, "\n", "p = ", p, "\n \n")
+
+return(results)
+}
+
+HL.table = hoslem(df$Outcome, model_main_int$fitted.values)
+```
+
+#Diagnostics:
+```{r}
+par(mfrow=c(2,2))
+plot(model_main_int)
+```
+
+```{r}
+plot(model_main_int, 4)
+```
+
+```{r}
+outlier<-rbind(df[59,], df[229,], df[488,])
+outlier
+```
+
+#Final model of data with imputation:
+```{r}
+model_final<-glm(formula = Outcome ~ Pregnancies + BMI + DiabetesPedigreeFunction + Age + Pregnancies:Age, family = binomial(link = logit), data = df)
+library(sjPlot)
+tab_model(model_final, dv.labels = 'Final model with imputation', digits = 3)
+```
+
+```{r}
+round(exp(model_final$coefficients),3)
+```
+
+```{r,warning=FALSE}
+round(exp(confint(model_final)),3)
+```
+
+
+#Extract complete data
+```{r}
+df<-read.csv('diabetes.csv')
+df<-df[,c(-2,-5)]
+df_comp <- df[,-7]
+df_comp[df_comp==0]<-NA
+df_comp$Outcome<-df$Outcome
+df_comp = df_comp[complete.cases(df_comp),]
+```
+
+#Fit a model with confounder variables with backward selection: 
+```{r}
+model2_conf1 <- glm(formula=Outcome ~ BloodPressure + SkinThickness + BMI + DiabetesPedigreeFunction + Age, family=binomial(link=logit), data=df_comp)
+step(model2_conf1, scope=~1, direction="backward", p=0.2)
+```
+
+#Final confounder model: 
+```{r}
+model2_conf2<-glm(formula = Outcome ~ BMI + DiabetesPedigreeFunction + Age, family = binomial(link = logit), data = df_comp)
+#summary(model2_conf2)
+```
+
+#Add main variable of interest - Pregnancies: 
+```{r}
+model2_main<-glm(formula = Outcome ~ Pregnancies + BMI + DiabetesPedigreeFunction + Age, family = binomial(link = logit), data = df_comp)
+summary(model2_main)
+```
+
+#Add interaction: 
+```{r}
+model2_main_int<-glm(formula = Outcome ~ Pregnancies + BMI + DiabetesPedigreeFunction + Age + Pregnancies:Age, family = binomial(link = logit), data = df_comp)
+anova(model2_main, model2_main_int, test='LRT')
+```
+
+#Diagnostics:
+```{r}
+par(mfrow=c(2,2))
+plot(model2_main)
+```
+
+```{r}
+plot(model2_main, 4)
+```
+
+
+```{r}
+outlier<-rbind(df[229,], df[460,], df[674,])
+outlier
+```
+
+#Goodness of Fit:
+```{r,warning=FALSE}
+HL.table = hoslem(df_comp$Outcome, model2_main_int$fitted.values)
+```
+
+#Final model of complete case data:
+```{r}
+model2_final<-glm(formula = Outcome ~ Pregnancies + BMI + DiabetesPedigreeFunction + Age + Pregnancies:Age, family = binomial(link = logit), data = df_comp)
+```
+
+#Sensitivity:
+```{r}
+library(sjPlot)
+tab_model(model_final, model2_final, dv.labels = c("Final Model with Imputation", "Final Model with Completers"), digits = 3)
+```
+
+
+
